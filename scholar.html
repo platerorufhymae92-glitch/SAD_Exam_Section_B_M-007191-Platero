@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scholar</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    table { width: 100%; border-collapse: collapse; background: #fff; margin-top: 12px; font-size: 14px; }
+    th, td { border: 1px solid #e5e7eb; padding: 8px; text-align: left; }
+    th { background: #e5e7eb; }
+    .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); margin-bottom: 20px; }
+    .row { display: flex; gap: 12px; }
+    .row > div { flex: 1; }
+    .scroll { overflow-x: auto; }
+    td button { margin: 0; padding: 5px 10px; }
+    #cancelBtn { display: none; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <strong>Scholar Page</strong>
+    <button onclick="logout()">Log out</button>
+  </div>
+
+  <div class="wide">
+    <h2 id="welcome">Loading...</h2>
+    <p id="programInfo"></p>
+
+    <div class="card">
+      <h2 id="formTitle">Submit semester grades</h2>
+      <form id="subForm" novalidate>
+        <div class="row">
+          <div>
+            <label for="ay">Academic year</label>
+            <select id="ay">
+              <option value="2026-2027">2026-2027</option>
+              <option value="2025-2026">2025-2026</option>
+            </select>
+          </div>
+          <div>
+            <label for="sem">Semester</label>
+            <select id="sem">
+              <option value="1">1</option>
+              <option value="2">2</option>
+            </select>
+          </div>
+        </div>
+
+        <label for="gwa">GWA (1.00 to 5.00)</label>
+        <input id="gwa" type="number" step="0.01">
+
+        <div class="row">
+          <div>
+            <label for="units">Enrolled units</label>
+            <input id="units" type="number" step="1">
+          </div>
+          <div>
+            <label for="failed">Failed subjects</label>
+            <input id="failed" type="number" step="1">
+          </div>
+        </div>
+
+        <div class="row">
+          <div>
+            <label for="inc">Incomplete grades</label>
+            <input id="inc" type="number" step="1">
+          </div>
+          <div>
+            <label for="drop">Dropped subjects</label>
+            <input id="drop" type="number" step="1">
+          </div>
+        </div>
+
+        <label for="evidence">Grade document reference</label>
+        <input id="evidence" placeholder="e.g. GRADE-B01-2026S1">
+
+        <button type="submit" id="submitBtn">Submit</button>
+        <button type="button" class="secondary" id="cancelBtn">Cancel correction</button>
+      </form>
+      <div id="subMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>My submissions</h2>
+      <div id="listMsg" class="msg"></div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>AY</th><th>Sem</th><th>GWA</th><th>Units</th><th>Failed</th><th>INC</th><th>Drop</th>
+              <th>Evidence</th><th>Submitted (PH time)</th><th>Verification</th><th>Reason</th>
+              <th>Compliance</th><th>Renewal</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="subRows"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script>
+    let me = null;
+    let hasProgram = false;
+    let editingId = null;
+    let submissionsById = {};
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : s;
+      return d.innerHTML;
+    }
+
+    function showMsg(id, type, text) {
+      const el = document.getElementById(id);
+      el.className = 'msg ' + type;
+      el.textContent = text;
+    }
+
+    function fmtTime(t) {
+      return new Date(t).toLocaleString('en-PH', { timeZone: 'Asia/Manila' });
+    }
+
+    function toCount(value) {
+      const s = String(value).trim();
+      if (s === '' || !/^-?\d+$/.test(s)) return NaN;
+      return parseInt(s, 10);
+    }
+
+    function setEditMode(on) {
+      document.getElementById('formTitle').textContent = on ? 'Correct and resubmit' : 'Submit semester grades';
+      document.getElementById('submitBtn').textContent = on ? 'Resubmit' : 'Submit';
+      document.getElementById('cancelBtn').style.display = on ? 'inline-block' : 'none';
+      document.getElementById('ay').disabled = on;
+      document.getElementById('sem').disabled = on;
+    }
+
+    function cancelEdit() {
+      editingId = null;
+      setEditMode(false);
+      document.getElementById('subForm').reset();
+    }
+
+    async function loadProgram() {
+      const { data, error } = await db
+        .from('scholar_assignments')
+        .select('programs(name)')
+        .eq('scholar_id', me.id)
+        .maybeSingle();
+      if (error) { showMsg('listMsg', 'error', 'Cannot load program: ' + error.message); return; }
+      if (data && data.programs) {
+        hasProgram = true;
+        document.getElementById('programInfo').textContent = 'Program: ' + data.programs.name;
+      } else {
+        document.getElementById('programInfo').textContent = 'No program assigned yet. Please contact the Scholarship Office.';
+      }
+    }
+
+    async function loadSubmissions() {
+      const { data, error } = await db
+        .from('submissions')
+        .select('*')
+        .eq('scholar_id', me.id)
+        .order('academic_year', { ascending: false })
+        .order('semester', { ascending: false });
+      if (error) { showMsg('listMsg', 'error', 'Cannot load submissions: ' + error.message); return; }
+
+      submissionsById = {};
+      data.forEach(s => { submissionsById[s.id] = s; });
+
+      const rows = document.getElementById('subRows');
+      if (data.length === 0) {
+        rows.innerHTML = '<tr><td colspan="14">No submissions yet.</td></tr>';
+        return;
+      }
+      rows.innerHTML = data.map(s => {
+        const action = s.verification_status === 'Returned'
+          ? '<button data-correct="' + s.id + '">Correct</button>' : '';
+        return '<tr>' +
+          '<td>' + esc(s.academic_year) + '</td>' +
+          '<td>' + s.semester + '</td>' +
+          '<td>' + Number(s.gwa).toFixed(2) + '</td>' +
+          '<td>' + s.enrolled_units + '</td>' +
+          '<td>' + s.failed_count + '</td>' +
+          '<td>' + s.incomplete_count + '</td>' +
+          '<td>' + s.dropped_count + '</td>' +
+          '<td>' + esc(s.evidence_ref) + '</td>' +
+          '<td>' + fmtTime(s.submitted_at) + '</td>' +
+          '<td>' + esc(s.verification_status) + '</td>' +
+          '<td>' + esc(s.verification_reason) + '</td>' +
+          '<td>' + esc(s.compliance_result) + '</td>' +
+          '<td>' + esc(s.renewal_decision) + '</td>' +
+          '<td>' + action + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    document.getElementById('subRows').addEventListener('click', (e) => {
+      const id = e.target.getAttribute('data-correct');
+      if (!id) return;
+      const s = submissionsById[id];
+      if (!s) return;
+      editingId = id;
+      setEditMode(true);
+      document.getElementById('ay').value = s.academic_year;
+      document.getElementById('sem').value = String(s.semester);
+      document.getElementById('gwa').value = Number(s.gwa).toFixed(2);
+      document.getElementById('units').value = s.enrolled_units;
+      document.getElementById('failed').value = s.failed_count;
+      document.getElementById('inc').value = s.incomplete_count;
+      document.getElementById('drop').value = s.dropped_count;
+      document.getElementById('evidence').value = s.evidence_ref;
+      showMsg('subMsg', 'ok', 'Returned reason: ' + (s.verification_reason || '(none)') + '. Fix the values below, then click Resubmit.');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+
+    document.getElementById('cancelBtn').addEventListener('click', () => {
+      cancelEdit();
+      document.getElementById('subMsg').className = 'msg';
+    });
+
+    document.getElementById('subForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      document.getElementById('subMsg').className = 'msg';
+
+      if (!hasProgram) { showMsg('subMsg', 'error', 'You have no assigned program yet. Please contact the Scholarship Office.'); return; }
+
+      const ay = document.getElementById('ay').value;
+      const sem = parseInt(document.getElementById('sem').value, 10);
+      const gwaText = document.getElementById('gwa').value.trim();
+      const gwa = parseFloat(gwaText);
+      const units = toCount(document.getElementById('units').value);
+      const failed = toCount(document.getElementById('failed').value);
+      const inc = toCount(document.getElementById('inc').value);
+      const drop = toCount(document.getElementById('drop').value);
+      const evidence = document.getElementById('evidence').value.trim();
+
+      if (gwaText === '' || isNaN(gwa)) { showMsg('subMsg', 'error', 'GWA is required and must be a number.'); return; }
+      if (gwa < 1.00 || gwa > 5.00) { showMsg('subMsg', 'error', 'GWA must be between 1.00 and 5.00.'); return; }
+      if (isNaN(units) || units < 0) { showMsg('subMsg', 'error', 'Enrolled units must be a whole number, 0 or higher.'); return; }
+      if (isNaN(failed) || failed < 0) { showMsg('subMsg', 'error', 'Failed subjects must be a whole number, 0 or higher.'); return; }
+      if (isNaN(inc) || inc < 0) { showMsg('subMsg', 'error', 'Incomplete grades must be a whole number, 0 or higher.'); return; }
+      if (isNaN(drop) || drop < 0) { showMsg('subMsg', 'error', 'Dropped subjects must be a whole number, 0 or higher.'); return; }
+      if (evidence === '') { showMsg('subMsg', 'error', 'Grade document reference is required.'); return; }
+
+      // ----- CORRECTION / RESUBMIT -----
+      if (editingId) {
+        const { data, error } = await db.from('submissions').update({
+          gwa: gwa,
+          enrolled_units: units,
+          failed_count: failed,
+          incomplete_count: inc,
+          dropped_count: drop,
+          evidence_ref: evidence,
+          verification_status: 'Pending',
+          verification_reason: null,
+          compliance_result: 'Not Evaluated',
+          renewal_decision: 'None'
+        }).eq('id', editingId).eq('verification_status', 'Returned').select('id');
+
+        if (error) { showMsg('subMsg', 'error', 'Resubmit failed: ' + error.message); return; }
+        if (!data || data.length === 0) { showMsg('subMsg', 'error', 'Resubmit failed. This record is no longer Returned.'); return; }
+
+        await db.from('history_log').insert({
+          submission_id: editingId,
+          action: 'Resubmitted',
+          actor_id: me.id,
+          details: 'Scholar corrected and resubmitted AY ' + ay + ' Sem ' + sem
+        });
+
+        cancelEdit();
+        showMsg('subMsg', 'ok', 'Resubmitted. Status: Pending verification.');
+        loadSubmissions();
+        return;
+      }
+
+      // ----- NEW SUBMISSION -----
+      const { data, error } = await db.from('submissions').insert({
+        scholar_id: me.id,
+        academic_year: ay,
+        semester: sem,
+        gwa: gwa,
+        enrolled_units: units,
+        failed_count: failed,
+        incomplete_count: inc,
+        dropped_count: drop,
+        evidence_ref: evidence
+      }).select('id').single();
+
+      if (error) {
+        if (error.code === '23505') {
+          showMsg('subMsg', 'error', 'You already submitted for Academic Year ' + ay + ', Semester ' + sem + '. Duplicate submissions are not allowed.');
+        } else {
+          showMsg('subMsg', 'error', 'Submit failed: ' + error.message);
+        }
+        return;
+      }
+
+      await db.from('history_log').insert({
+        submission_id: data.id,
+        action: 'Submitted',
+        actor_id: me.id,
+        details: 'Scholar submitted AY ' + ay + ' Sem ' + sem
+      });
+
+      showMsg('subMsg', 'ok', 'Submitted. Status: Pending verification.');
+      document.getElementById('subForm').reset();
+      loadSubmissions();
+    });
+
+    (async () => {
+      me = await requireRole('scholar');
+      if (!me) return;
+      document.getElementById('welcome').textContent = 'Welcome, ' + me.full_name + ' (' + me.student_id + ')';
+      await loadProgram();
+      await loadSubmissions();
+    })();
+  </script>
+</body>
+</html>

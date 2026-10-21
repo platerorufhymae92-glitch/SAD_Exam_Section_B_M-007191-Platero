@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Staff</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    table { width: 100%; border-collapse: collapse; background: #fff; margin-top: 12px; font-size: 13px; }
+    th, td { border: 1px solid #e5e7eb; padding: 6px; text-align: left; vertical-align: top; }
+    th { background: #e5e7eb; }
+    .card { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.1); margin-bottom: 20px; }
+    td button { margin: 2px 2px 0 0; padding: 4px 8px; font-size: 12px; }
+    td select { width: auto; }
+    .scroll { overflow-x: auto; }
+    .box { margin-top: 12px; padding: 10px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; display: none; }
+    .box ul { margin: 6px 0 0; padding-left: 18px; }
+    .pass { color: #166534; }
+    .fail { color: #991b1b; }
+    .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 12px; }
+    .stat { flex: 1; min-width: 150px; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 14px; text-align: center; }
+    .stat .num { font-size: 32px; font-weight: bold; color: #1d4ed8; }
+    .stat .lbl { font-size: 13px; color: #374151; }
+    .filters { display: flex; gap: 12px; flex-wrap: wrap; }
+    .filters > div { flex: 1; min-width: 160px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <strong>Staff Page</strong>
+    <button onclick="logout()">Log out</button>
+  </div>
+
+  <div class="wide" style="max-width:1300px">
+    <h2 id="welcome">Loading...</h2>
+
+    <div class="card">
+      <h2>Dashboard</h2>
+      <div class="filters">
+        <div>
+          <label for="dashAy">Academic year</label>
+          <select id="dashAy">
+            <option value="2026-2027">2026-2027</option>
+            <option value="2025-2026">2025-2026</option>
+          </select>
+        </div>
+        <div>
+          <label for="dashSem">Semester</label>
+          <select id="dashSem">
+            <option value="1">1</option>
+            <option value="2">2</option>
+          </select>
+        </div>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="num" id="stTotal">0</div><div class="lbl">Total assigned scholars</div></div>
+        <div class="stat"><div class="num" id="stPending">0</div><div class="lbl">Pending verification</div></div>
+        <div class="stat"><div class="num" id="stCompliant">0</div><div class="lbl">Compliant</div></div>
+        <div class="stat"><div class="num" id="stDeficient">0</div><div class="lbl">With Deficiency</div></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Submissions</h2>
+      <div class="filters">
+        <div>
+          <label for="search">Search (student ID or name)</label>
+          <input id="search" placeholder="e.g. B01 or Scholar">
+        </div>
+        <div>
+          <label for="fProgram">Program</label>
+          <select id="fProgram"><option value="">All programs</option></select>
+        </div>
+        <div>
+          <label for="fCompliance">Compliance</label>
+          <select id="fCompliance">
+            <option value="">All</option>
+            <option value="Not Evaluated">Not Evaluated</option>
+            <option value="Compliant">Compliant</option>
+            <option value="With Deficiency">With Deficiency</option>
+          </select>
+        </div>
+      </div>
+      <div id="subMsg" class="msg"></div>
+      <div class="scroll">
+        <table>
+          <thead>
+            <tr>
+              <th>Student ID</th><th>Name</th><th>Program</th><th>AY</th><th>Sem</th><th>GWA</th><th>Units</th>
+              <th>Failed</th><th>INC</th><th>Drop</th><th>Evidence</th><th>Submitted (PH time)</th>
+              <th>Verification</th><th>Reason</th><th>Compliance</th><th>Deficiency reasons</th>
+              <th>Renewal</th><th>Notes</th><th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="subRows"></tbody>
+        </table>
+      </div>
+      <div id="checks" class="box"></div>
+      <div id="history" class="box"></div>
+    </div>
+
+    <div class="card">
+      <h2>Register scholar</h2>
+      <form id="regForm">
+        <label for="studentId">Student ID</label>
+        <input id="studentId" required>
+        <label for="fullName">Full name</label>
+        <input id="fullName" required>
+        <label for="regProgram">Program</label>
+        <select id="regProgram" required></select>
+        <button type="submit">Register and assign</button>
+      </form>
+      <div id="regMsg" class="msg"></div>
+    </div>
+
+    <div class="card">
+      <h2>Scholars</h2>
+      <div id="listMsg" class="msg"></div>
+      <table>
+        <thead>
+          <tr><th>Student ID</th><th>Name</th><th>Program</th></tr>
+        </thead>
+        <tbody id="scholarRows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script>
+    let me = null;
+    let programs = [];
+    let allSubs = [];
+    let subsById = {};
+    let totalAssigned = 0;
+
+    function esc(s) {
+      const d = document.createElement('div');
+      d.textContent = s == null ? '' : s;
+      return d.innerHTML;
+    }
+
+    function showMsg(id, type, text) {
+      const el = document.getElementById(id);
+      el.className = 'msg ' + type;
+      el.textContent = text;
+    }
+
+    function fmtTime(t) {
+      return new Date(t).toLocaleString('en-PH', { timeZone: 'Asia/Manila' });
+    }
+
+    function programOptions() {
+      return programs.map(p => '<option value="' + p.id + '">' + esc(p.name) + '</option>').join('');
+    }
+
+    function programOf(s) {
+      const prof = s.profiles || {};
+      let a = prof.scholar_assignments;
+      if (Array.isArray(a)) a = a[0];
+      return a && a.programs ? a.programs : null;
+    }
+
+    async function loadPrograms() {
+      const { data, error } = await db.from('programs').select('*').order('id');
+      if (error) { showMsg('listMsg', 'error', 'Cannot load programs: ' + error.message); return; }
+      programs = data;
+      document.getElementById('regProgram').innerHTML = programOptions();
+      document.getElementById('fProgram').innerHTML =
+        '<option value="">All programs</option>' +
+        programs.map(p => '<option value="' + esc(p.name) + '">' + esc(p.name) + '</option>').join('');
+    }
+
+    async function loadTotalAssigned() {
+      const { count, error } = await db.from('scholar_assignments')
+        .select('id', { count: 'exact', head: true });
+      if (error) { showMsg('subMsg', 'error', 'Cannot count scholars: ' + error.message); return; }
+      totalAssigned = count || 0;
+    }
+
+    async function loadScholars() {
+      const { data, error } = await db
+        .from('profiles')
+        .select('id, student_id, full_name, scholar_assignments(program_id, programs(name))')
+        .eq('role', 'scholar')
+        .order('student_id');
+      if (error) { showMsg('listMsg', 'error', 'Cannot load scholars: ' + error.message); return; }
+
+      const rows = document.getElementById('scholarRows');
+      if (data.length === 0) {
+        rows.innerHTML = '<tr><td colspan="3">No scholars yet.</td></tr>';
+        return;
+      }
+      rows.innerHTML = data.map(s => {
+        let a = s.scholar_assignments;
+        if (Array.isArray(a)) a = a[0];
+        let programCell;
+        if (a && a.programs) {
+          programCell = esc(a.programs.name);
+        } else {
+          programCell = '<select id="sel-' + s.id + '">' + programOptions() + '</select> ' +
+                        '<button data-assign="' + s.id + '">Assign</button>';
+        }
+        return '<tr><td>' + esc(s.student_id) + '</td><td>' + esc(s.full_name) + '</td><td>' + programCell + '</td></tr>';
+      }).join('');
+    }
+
+    async function loadSubmissions() {
+      const { data, error } = await db
+        .from('submissions')
+        .select('*, profiles(student_id, full_name, scholar_assignments(program_id, programs(*)))')
+        .order('submitted_at', { ascending: false });
+      if (error) { showMsg('subMsg', 'error', 'Cannot load submissions: ' + error.message); return; }
+      allSubs = data;
+      subsById = {};
+      data.forEach(s => { subsById[s.id] = s; });
+      await loadTotalAssigned();
+      renderAll();
+    }
+
+    function renderAll() {
+      const ay = document.getElementById('dashAy').value;
+      const sem = parseInt(document.getElementById('dashSem').value, 10);
+
+      // Dashboard counts: selected semester only
+      const semSubs = allSubs.filter(s => s.academic_year === ay && s.semester === sem);
+      document.getElementById('stTotal').textContent = totalAssigned;
+      document.getElementById('stPending').textContent = semSubs.filter(s => s.verification_status === 'Pending').length;
+      document.getElementById('stCompliant').textContent = semSubs.filter(s => s.compliance_result === 'Compliant').length;
+      document.getElementById('stDeficient').textContent = semSubs.filter(s => s.compliance_result === 'With Deficiency').length;
+
+      // Table: selected semester + search + filters
+      const q = document.getElementById('search').value.trim().toLowerCase();
+      const fProg = document.getElementById('fProgram').value;
+      const fComp = document.getElementById('fCompliance').value;
+
+      const shown = semSubs.filter(s => {
+        const p = s.profiles || {};
+        const prog = programOf(s);
+        if (q) {
+          const hay = ((p.student_id || '') + ' ' + (p.full_name || '')).toLowerCase();
+          if (!hay.includes(q)) return false;
+        }
+        if (fProg && (!prog || prog.name !== fProg)) return false;
+        if (fComp && s.compliance_result !== fComp) return false;
+        return true;
+      });
+
+      const rows = document.getElementById('subRows');
+      if (shown.length === 0) {
+        rows.innerHTML = '<tr><td colspan="19">No submissions match.</td></tr>';
+        return;
+      }
+      rows.innerHTML = shown.map(s => {
+        const p = s.profiles || {};
+        const prog = programOf(s);
+        let action = '';
+        if (s.verification_status === 'Pending') {
+          action += '<button data-verify="' + s.id + '">Verify</button>' +
+                    '<button class="secondary" data-return="' + s.id + '">Return</button>';
+        }
+        action += '<button data-eval="' + s.id + '">Evaluate</button>' +
+                  '<button data-approve="' + s.id + '">Approve</button>' +
+                  '<button class="secondary" data-hold="' + s.id + '">Hold</button>' +
+                  '<button class="secondary" data-checks="' + s.id + '">Checks</button>' +
+                  '<button class="secondary" data-history="' + s.id + '">History</button>';
+        return '<tr>' +
+          '<td>' + esc(p.student_id) + '</td>' +
+          '<td>' + esc(p.full_name) + '</td>' +
+          '<td>' + esc(prog ? prog.name : '') + '</td>' +
+          '<td>' + esc(s.academic_year) + '</td>' +
+          '<td>' + s.semester + '</td>' +
+          '<td>' + Number(s.gwa).toFixed(2) + '</td>' +
+          '<td>' + s.enrolled_units + '</td>' +
+          '<td>' + s.failed_count + '</td>' +
+          '<td>' + s.incomplete_count + '</td>' +
+          '<td>' + s.dropped_count + '</td>' +
+          '<td>' + esc(s.evidence_ref) + '</td>' +
+          '<td>' + fmtTime(s.submitted_at) + '</td>' +
+          '<td>' + esc(s.verification_status) + '</td>' +
+          '<td>' + esc(s.verification_reason) + '</td>' +
+          '<td>' + esc(s.compliance_result) + '</td>' +
+          '<td>' + esc(s.deficiency_reasons) + '</td>' +
+          '<td>' + esc(s.renewal_decision) + '</td>' +
+          '<td>' + esc(s.decision_notes) + '</td>' +
+          '<td>' + action + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+
+    function showChecks(id) {
+      const s = subsById[id];
+      const box = document.getElementById('checks');
+      document.getElementById('history').style.display = 'none';
+      const prog = s ? programOf(s) : null;
+      if (!s || !prog) { box.style.display = 'block'; box.textContent = 'No program assigned.'; return; }
+      const items = [];
+      const add = (ok, text) => items.push('<li class="' + (ok ? 'pass' : 'fail') + '">' + (ok ? 'PASS' : 'FAIL') + ': ' + esc(text) + '</li>');
+
+      add(s.verification_status === 'Verified', 'Evidence status: ' + s.verification_status);
+      add(!!(s.evidence_ref && s.evidence_ref.trim()), 'Grade document reference present');
+      add(Number(s.gwa) <= Number(prog.max_gwa), 'GWA ' + Number(s.gwa).toFixed(2) + ' (maximum ' + Number(prog.max_gwa).toFixed(2) + ')');
+      add(s.enrolled_units >= prog.min_units, 'Enrolled units ' + s.enrolled_units + ' (minimum ' + prog.min_units + ')');
+      add(s.failed_count <= prog.max_failed, 'Failed subjects ' + s.failed_count + ' (allowed ' + prog.max_failed + ')');
+      add(s.incomplete_count <= prog.max_incomplete, 'Incomplete grades ' + s.incomplete_count + ' (allowed ' + prog.max_incomplete + ')');
+      add(s.dropped_count <= prog.max_dropped, 'Dropped subjects ' + s.dropped_count + ' (allowed ' + prog.max_dropped + ')');
+      add(new Date(s.submitted_at) <= new Date(prog.deadline), 'Submitted ' + fmtTime(s.submitted_at) + ' (deadline ' + fmtTime(prog.deadline) + ')');
+
+      const p = s.profiles || {};
+      box.innerHTML = '<strong>Policy checks: ' + esc(p.student_id) + ' (' + esc(prog.name) + ')</strong><ul>' + items.join('') + '</ul>' +
+        '<p>Stored result: <strong>' + esc(s.compliance_result) + '</strong>. The official evaluation is done by the Evaluate button.</p>';
+      box.style.display = 'block';
+    }
+
+    async function showHistory(id) {
+      const box = document.getElementById('history');
+      document.getElementById('checks').style.display = 'none';
+      const { data, error } = await db
+        .from('history_log')
+        .select('action, details, created_at, actor:profiles!actor_id(full_name)')
+        .eq('submission_id', id)
+        .order('created_at', { ascending: true });
+      if (error) { box.style.display = 'block'; box.textContent = 'Cannot load history: ' + error.message; return; }
+
+      const s = subsById[id];
+      const p = (s && s.profiles) || {};
+      let html = '<strong>History: ' + esc(p.student_id) + '</strong>';
+      if (data.length === 0) {
+        html += '<p>No history yet.</p>';
+      } else {
+        html += '<table><thead><tr><th>Time (PH)</th><th>Actor</th><th>Action</th><th>Details</th></tr></thead><tbody>' +
+          data.map(h => '<tr><td>' + fmtTime(h.created_at) + '</td><td>' + esc(h.actor ? h.actor.full_name : '') +
+            '</td><td>' + esc(h.action) + '</td><td>' + esc(h.details) + '</td></tr>').join('') +
+          '</tbody></table>';
+      }
+      box.innerHTML = html;
+      box.style.display = 'block';
+    }
+
+    async function setVerification(id, status, reason) {
+      const { data, error } = await db.from('submissions')
+        .update({ verification_status: status, verification_reason: reason })
+        .eq('id', id)
+        .eq('verification_status', 'Pending')
+        .select('id');
+      if (error) { showMsg('subMsg', 'error', 'Update failed: ' + error.message); return; }
+      if (!data || data.length === 0) {
+        showMsg('subMsg', 'error', 'Nothing changed. The record is no longer Pending.');
+        loadSubmissions();
+        return;
+      }
+      await db.from('history_log').insert({
+        submission_id: id,
+        action: status,
+        actor_id: me.id,
+        details: reason ? 'Reason: ' + reason : 'Evidence verified'
+      });
+      showMsg('subMsg', 'ok', 'Record marked ' + status + '.');
+      loadSubmissions();
+    }
+
+    async function evaluate(id) {
+      const { data, error } = await db.rpc('evaluate_submission', { p_id: id });
+      if (error) { showMsg('subMsg', 'error', error.message); return; }
+      showMsg('subMsg', 'ok', 'Evaluation result: ' + data);
+      await loadSubmissions();
+      showChecks(id);
+    }
+
+    async function decide(id, decision, notes) {
+      const { error } = await db.rpc('decide_renewal', { p_id: id, p_decision: decision, p_notes: notes });
+      if (error) { showMsg('subMsg', 'error', error.message); return; }
+      showMsg('subMsg', 'ok', 'Renewal ' + decision + '.');
+      loadSubmissions();
+    }
+
+    document.getElementById('subRows').addEventListener('click', (e) => {
+      const t = e.target;
+      const verifyId = t.getAttribute('data-verify');
+      const returnId = t.getAttribute('data-return');
+      const evalId = t.getAttribute('data-eval');
+      const approveId = t.getAttribute('data-approve');
+      const holdId = t.getAttribute('data-hold');
+      const checksId = t.getAttribute('data-checks');
+      const historyId = t.getAttribute('data-history');
+
+      if (verifyId) {
+        setVerification(verifyId, 'Verified', null);
+      } else if (returnId) {
+        const reason = prompt('Reason for returning this record (required):');
+        if (reason === null) return;
+        if (reason.trim() === '') { showMsg('subMsg', 'error', 'A reason is required to return a record.'); return; }
+        setVerification(returnId, 'Returned', reason.trim());
+      } else if (evalId) {
+        evaluate(evalId);
+      } else if (approveId) {
+        const notes = prompt('Decision notes (optional):');
+        if (notes === null) return;
+        decide(approveId, 'Approved', notes);
+      } else if (holdId) {
+        const notes = prompt('Reason for holding renewal (required):');
+        if (notes === null) return;
+        decide(holdId, 'Held', notes);
+      } else if (checksId) {
+        showChecks(checksId);
+      } else if (historyId) {
+        showHistory(historyId);
+      }
+    });
+
+    ['dashAy', 'dashSem', 'fProgram', 'fCompliance'].forEach(id =>
+      document.getElementById(id).addEventListener('change', renderAll));
+    document.getElementById('search').addEventListener('input', renderAll);
+
+    document.getElementById('scholarRows').addEventListener('click', async (e) => {
+      const scholarId = e.target.getAttribute('data-assign');
+      if (!scholarId) return;
+      const programId = parseInt(document.getElementById('sel-' + scholarId).value, 10);
+      const { error } = await db.from('scholar_assignments')
+        .insert({ scholar_id: scholarId, program_id: programId });
+      if (error) { showMsg('listMsg', 'error', 'Assign failed: ' + error.message); return; }
+      showMsg('listMsg', 'ok', 'Program assigned.');
+      loadScholars();
+      loadSubmissions();
+    });
+
+    document.getElementById('regForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const studentId = document.getElementById('studentId').value.trim();
+      const fullName = document.getElementById('fullName').value.trim();
+      const programId = parseInt(document.getElementById('regProgram').value, 10);
+
+      if (!studentId || !fullName) { showMsg('regMsg', 'error', 'Student ID and name are required.'); return; }
+
+      const { data: prof, error: e1 } = await db.from('profiles')
+        .insert({ role: 'scholar', student_id: studentId, full_name: fullName })
+        .select('id').single();
+      if (e1) {
+        const dup = e1.message.toLowerCase().includes('duplicate');
+        showMsg('regMsg', 'error', dup ? 'That student ID is already registered.' : 'Register failed: ' + e1.message);
+        return;
+      }
+
+      const { error: e2 } = await db.from('scholar_assignments')
+        .insert({ scholar_id: prof.id, program_id: programId });
+      if (e2) { showMsg('regMsg', 'error', 'Scholar saved, but assigning the program failed: ' + e2.message); loadScholars(); return; }
+
+      showMsg('regMsg', 'ok', 'Scholar registered and assigned.');
+      document.getElementById('regForm').reset();
+      loadScholars();
+      loadSubmissions();
+    });
+
+    (async () => {
+      me = await requireRole('staff');
+      if (!me) return;
+      document.getElementById('welcome').textContent = 'Welcome, ' + me.full_name + ' (Staff)';
+      await loadPrograms();
+      await loadScholars();
+      await loadSubmissions();
+    })();
+  </script>
+</body>
+</html>

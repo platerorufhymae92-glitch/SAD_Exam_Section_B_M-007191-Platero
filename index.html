@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Scholarship Monitoring - Login</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Scholarship Monitoring</h1>
+    <p>Please log in.</p>
+    <form id="loginForm">
+      <label for="email">Email</label>
+      <input type="email" id="email" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" required>
+      <button type="submit">Log in</button>
+    </form>
+    <div id="msg" class="msg"></div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.0/dist/umd/supabase.js"></script>
+  <script src="config.js"></script>
+  <script src="auth.js"></script>
+  <script>
+    const msg = document.getElementById('msg');
+
+    function showError(text) { msg.className = 'msg error'; msg.textContent = text; }
+
+    function goToHome(profile) {
+      window.location.href = profile.role === 'staff' ? 'staff.html' : 'scholar.html';
+    }
+
+    // If already logged in, skip the login page
+    getMyProfile().then(p => { if (p) goToHome(p); });
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      msg.className = 'msg';
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      const { error } = await db.auth.signInWithPassword({ email, password });
+      if (error) { showError('Login failed: ' + error.message); return; }
+
+      const profile = await getMyProfile();
+      if (!profile) { showError('Logged in, but no profile is linked to this account.'); return; }
+      goToHome(profile);
+    });
+  </script>
+</body>
+</html>
